@@ -509,11 +509,6 @@ export default class KeepTheRhythm extends Plugin {
 			}),
 		);
 		this.registerEvent(
-			this.app.vault.on("delete", (file: TAbstractFile) => {
-				if (file instanceof TFile) events.handleFileDelete(file);
-			}),
-		);
-		this.registerEvent(
 			this.app.vault.on("create", (file: TAbstractFile) => {
 				if (file instanceof TFile) events.handleFileCreate(file);
 			}),

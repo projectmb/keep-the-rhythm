@@ -73,12 +73,17 @@ export async function handleEditorChange(
 	const wordsAdded = newWordCount - totalWords;
 	const charsAdded = newCharCount - totalChars;
 
-	if (state.plugin.data.stats && (wordsAdded !== 0 || charsAdded !== 0)) {
+	// Only track positive changes (additions), ignore deletions
+	const wordsToTrack = wordsAdded > 0 ? wordsAdded : 0;
+	const charsToTrack = charsAdded > 0 ? charsAdded : 0;
+
+	// Updated: Use wordsToTrack and charsToTrack instead of wordsAdded and charsAdded
+	if (state.plugin.data.stats && (wordsToTrack !== 0 || charsToTrack !== 0)) {
 		if (state.plugin.data.stats.wholeVaultWordCount !== undefined) {
-			state.plugin.data.stats.wholeVaultWordCount += wordsAdded;
+			state.plugin.data.stats.wholeVaultWordCount += wordsToTrack; // Changed
 		}
 		if (state.plugin.data.stats.wholeVaultCharCount !== undefined) {
-			state.plugin.data.stats.wholeVaultCharCount += charsAdded;
+			state.plugin.data.stats.wholeVaultCharCount += charsToTrack; // Changed
 		}
 	}
 
@@ -101,15 +106,17 @@ export async function handleEditorChange(
 
 	if (!existingEntry) {
 		// No entry yet for this timeKey, so push a new one
+		// Updated: Use wordsToTrack and charsToTrack
 		changes.push({
 			timeKey: currentTimeKey,
-			w: wordsAdded || 0,
-			c: charsAdded || 0,
+			w: wordsToTrack,
+			c: charsToTrack,
 		});
 	} else {
 		// Entry exists, so update the word and char count
-		existingEntry.w += wordsAdded;
-		existingEntry.c += charsAdded;
+		// Updated: Use wordsToTrack and charsToTrack
+		existingEntry.w += wordsToTrack;
+		existingEntry.c += charsToTrack;
 	}
 
 	// WORKING ON UPDATING JUST TODAY!!!
@@ -246,85 +253,6 @@ async function checkStreak() {
 		state.plugin.updateCurrentStreak(true);
 	} else {
 		state.plugin.updateCurrentStreak(false);
-	}
-}
-
-/**
- * @function handleFileDelete
- * Should probably just get the fileWordCount and consider it as delta in it's dailyActivity?
- */
-export async function handleFileDelete(file: TFile) {
-	// Add this check at the beginning
-	if (!file || file.extension !== "md") {
-		return;
-	}
-	//FUTURE: correct file delta is only calculated if the user opens the file first
-	// if he doesnt there is no daily activity to get the current file count and it will not consider that into the calculations
-	try {
-		await getDB()
-			.dailyActivity.where("[date+filePath]")
-			.equals([state.today, file.path])
-			.modify((dailyEntry) => {
-				let wordSum = 0;
-				let charSum = 0;
-
-				const currentTimeKey =
-					floorMomentToFive(moment()).format("HH:mm");
-
-				/** If no changed was made to the file
-				 *  Then the delta is just the word count when it was opened
-				 */
-
-				if (!dailyEntry.changes || dailyEntry.changes?.length == 0) {
-					dailyEntry.changes.push({
-						timeKey: currentTimeKey,
-						w: -dailyEntry.wordCountStart,
-						c: -dailyEntry.charCountStart,
-					});
-					return;
-				}
-
-				/** If there where changes made,
-				 *  We need to sum those changes
-				 *  The last change is only included if it's timekey isn't the current one
-				 */
-				// Get the last change (if any)
-				const lastEntry =
-					dailyEntry.changes[dailyEntry.changes.length - 1];
-				const lastTimeKey = lastEntry?.timeKey;
-
-				for (let i = 0; i < dailyEntry.changes.length - 1; i++) {
-					wordSum += dailyEntry.changes[i].w;
-					charSum += dailyEntry.changes[i].c;
-				}
-
-				// If lastTimeKey is not the same as current, include it
-				if (lastEntry && lastTimeKey !== currentTimeKey) {
-					wordSum += lastEntry.w;
-					charSum += lastEntry.c;
-				}
-
-				const newEntry: TimeEntry = {
-					timeKey: currentTimeKey,
-					w: -(wordSum + dailyEntry.wordCountStart),
-					c: -(charSum + dailyEntry.charCountStart),
-				};
-
-				// Find and update the existing entry if it exists
-				const existingIndex = dailyEntry.changes.findIndex(
-					(e) => e.timeKey === currentTimeKey,
-				);
-
-				if (existingIndex !== -1) {
-					dailyEntry.changes[existingIndex] = newEntry;
-				} else {
-					dailyEntry.changes.push(newEntry);
-				}
-			});
-
-		state.emit(EVENTS.REFRESH_EVERYTHING);
-	} catch (error) {
-		console.error(`KTR failed deleting ${file.path} | ${error}`);
 	}
 }
 
