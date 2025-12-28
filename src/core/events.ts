@@ -28,6 +28,7 @@ export async function handleEditorChange(
 	info: any,
 	plugin: KeepTheRhythm,
 ) {
+	console.log("KTR: handleEditorChange called for file:", info.file?.path);
 	const file = info.file;
 
 	if (!file || file.extension !== "md") {
