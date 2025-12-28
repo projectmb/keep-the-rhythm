@@ -32,6 +32,7 @@ export async function handleEditorChange(
 	const file = info.file;
 
 	if (!file || file.extension !== "md") {
+		console.log("KTR: File rejected - not md or no file");
 		return;
 	}
 
@@ -43,16 +44,22 @@ export async function handleEditorChange(
 	 * But I think it's okay, there might just be a slight mismatch because of wordCountStart if the file wasn't seen today
 	 * */
 	if (!activity || activity?.filePath !== info.file.path) {
+		console.log("KTR: Activity mismatch, updating...");
 		// If handleFileOpen is not running (some weird focusing states), make it run and update the activity
 		if (!state.isUpdatingActivity) {
 			await handleFileOpen(info.file);
 			activity = state.currentActivity;
+			console.log("KTR: Activity updated:", activity);
 		} else {
+			console.log("KTR: Already updating activity, returning");
 			return;
 		}
 	}
 
-	if (!activity) return;
+	if (!activity) {
+		console.log("KTR: No activity found, returning");
+		return;
+	}
 
 	/** Calculate CHAR and WORD deltas based on state  */
 	const currentContent = editor.getValue();
@@ -77,7 +84,10 @@ export async function handleEditorChange(
 	// Only track positive changes (additions), ignore deletions
 	const wordsToTrack = wordsAdded > 0 ? wordsAdded : 0;
 	const charsToTrack = charsAdded > 0 ? charsAdded : 0;
-
+	console.log("KTR: Words/chars to track:", {
+		wordsToTrack,
+		charsToTrack
+	});
 	// Updated: Use wordsToTrack and charsToTrack instead of wordsAdded and charsAdded
 	if (state.plugin.data.stats && (wordsToTrack !== 0 || charsToTrack !== 0)) {
 		if (state.plugin.data.stats.wholeVaultWordCount !== undefined) {
@@ -95,7 +105,7 @@ export async function handleEditorChange(
 	 */
 	const changes: TimeEntry[] = state.currentActivity?.changes || [];
 	const currentTimeKey = floorMomentToFive(moment()).format("HH:mm");
-
+	console.log("KTR: Current time key:", currentTimeKey);
 	/**
 	 * Check if there is already a time key (HH:mm) for a change, create one if there isn't
 	 * Time keys are added in blocks of 5 minutes and snap to the nearest time
@@ -106,6 +116,7 @@ export async function handleEditorChange(
 	);
 
 	if (!existingEntry) {
+		console.log("KTR: Creating new time entry");
 		// No entry yet for this timeKey, so push a new one
 		// Updated: Use wordsToTrack and charsToTrack
 		changes.push({
@@ -114,12 +125,14 @@ export async function handleEditorChange(
 			c: charsToTrack,
 		});
 	} else {
+		console.log("KTR: Updating existing time entry");
 		// Entry exists, so update the word and char count
 		// Updated: Use wordsToTrack and charsToTrack
 		existingEntry.w += wordsToTrack;
 		existingEntry.c += charsToTrack;
 	}
 
+	console.log("KTR: Current changes:", changes);
 	// WORKING ON UPDATING JUST TODAY!!!
 	state.emit(EVENTS.REFRESH_EVERYTHING);
 
