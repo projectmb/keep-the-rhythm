@@ -360,12 +360,11 @@ export default class KeepTheRhythm extends Plugin {
 					// Extract the format from the template (e.g., "YYYY-MM-DD")
 					const format = match[1];
 					
-					// Try to extract date from the current file name
-					const file = this.app.vault.getAbstractFileByPath(filePath);
-					if (file) {
+					// Get the file where this code block is embedded (from context)
+					const contextFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+					if (contextFile && contextFile instanceof TFile) {
 						// Try to parse date from filename using common patterns
-						const fileName = file.basename;
-						
+						const fileName = contextFile.basename;				
 						// Try to match YYYY-MM-DD pattern in filename
 						const dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/);
 						
