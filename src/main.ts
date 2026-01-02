@@ -362,9 +362,11 @@ export default class KeepTheRhythm extends Plugin {
 					
 					// Get the file where this code block is embedded (from context)
 					const contextFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+					
 					if (contextFile && contextFile instanceof TFile) {
 						// Try to parse date from filename using common patterns
-						const fileName = contextFile.basename;				
+						const fileName = contextFile.basename;
+						
 						// Try to match YYYY-MM-DD pattern in filename
 						const dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/);
 						
@@ -376,7 +378,7 @@ export default class KeepTheRhythm extends Plugin {
 							date = moment().format(format);
 						}
 					} else {
-						// No active file, use today's date
+						// No file found, use today's date
 						date = moment().format(format);
 					}
 				} else {
