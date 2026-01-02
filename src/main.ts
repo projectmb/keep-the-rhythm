@@ -361,7 +361,7 @@ export default class KeepTheRhythm extends Plugin {
 					const format = match[1];
 					
 					// Try to extract date from the current file name
-					const file = this.app.workspace.getActiveFile();
+					const file = this.app.vault.getAbstractFileByPath(filePath);
 					if (file) {
 						// Try to parse date from filename using common patterns
 						const fileName = file.basename;
