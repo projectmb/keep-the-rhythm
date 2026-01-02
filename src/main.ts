@@ -350,26 +350,28 @@ export default class KeepTheRhythm extends Plugin {
 
 			let date;
 			const trimmedSource = source.trim();
-			if (source.trim() !== "") {
-			// Check if source contains template variable like {{date:YYYY-MM-DD}}
-			const templateRegex = /\{\{date:([^}]+)\}\}/;
-			const match = trimmedSource.match(templateRegex);
 			
-			if (match) {
-				// Extract the format from the template (e.g., "YYYY-MM-DD")
-				const format = match[1];
-				// Try to extract date from the current file name
-				const file = this.app.workspace.getActiveFile();
-				if (file) {
-					// Try to parse date from filename using common patterns
-					const fileName = file.basename;
+			if (trimmedSource !== "") {
+				// Check if source contains template variable like {{date:YYYY-MM-DD}}
+				const templateRegex = /\{\{date:([^}]+)\}\}/;
+				const match = trimmedSource.match(templateRegex);
+				
+				if (match) {
+					// Extract the format from the template (e.g., "YYYY-MM-DD")
+					const format = match[1];
 					
-					// Try to match YYYY-MM-DD pattern in filename
-					const dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/);
+					// Try to extract date from the current file name
+					const file = this.app.workspace.getActiveFile();
+					if (file) {
+						// Try to parse date from filename using common patterns
+						const fileName = file.basename;
 						
-					if (dateMatch) {
-						// Found date in filename, format it according to the template
-						date = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+						// Try to match YYYY-MM-DD pattern in filename
+						const dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/);
+						
+						if (dateMatch) {
+							// Found date in filename, format it according to the template
+							date = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
 						} else {
 							// Fallback to today's date if no date found in filename
 							date = moment().format(format);
@@ -381,8 +383,8 @@ export default class KeepTheRhythm extends Plugin {
 				} else {
 					// No template variable, use the source as-is (hardcoded date)
 					date = trimmedSource;
+				}
 			}
-			}	
 
 			root.render(
 				React.createElement(Entries, {
@@ -390,16 +392,6 @@ export default class KeepTheRhythm extends Plugin {
 				}),
 			);
 
-			// ctx.addChild(
-			// 	new (class extends MarkdownRenderChild {
-			// 		constructor(containerEl: HTMLElement) {
-			// 			super(containerEl);
-			// 		}
-			// 		onunload() {
-			// 			root.unmount();
-			// 		}
-			// 	})(container),
-			// );
 			return;
 		};
 	}
