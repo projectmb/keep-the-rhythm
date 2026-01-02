@@ -349,9 +349,41 @@ export default class KeepTheRhythm extends Plugin {
 			this.codeBlockRoots.set(el, { root, ctx, source });
 
 			let date;
+			const trimmedSource = source.trim();
 			if (source.trim() !== "") {
-				date = source.trim();
+			// Check if source contains template variable like {{date:YYYY-MM-DD}}
+			const templateRegex = /\{\{date:([^}]+)\}\}/;
+			const match = trimmedSource.match(templateRegex);
+			
+			if (match) {
+				// Extract the format from the template (e.g., "YYYY-MM-DD")
+				const format = match[1];
+				// Try to extract date from the current file name
+				const file = this.app.workspace.getActiveFile();
+				if (file) {
+					// Try to parse date from filename using common patterns
+					const fileName = file.basename;
+					
+					// Try to match YYYY-MM-DD pattern in filename
+					const dateMatch = fileName.match(/(\d{4})-(\d{2})-(\d{2})/);
+						
+					if (dateMatch) {
+						// Found date in filename, format it according to the template
+						date = `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`;
+						} else {
+							// Fallback to today's date if no date found in filename
+							date = moment().format(format);
+						}
+					} else {
+						// No active file, use today's date
+						date = moment().format(format);
+					}
+				} else {
+					// No template variable, use the source as-is (hardcoded date)
+					date = trimmedSource;
 			}
+			}	
+
 			root.render(
 				React.createElement(Entries, {
 					date: date,
