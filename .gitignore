@@ -30,3 +30,6 @@ keep-the-rhythm-backup-*
 backup-*
 keep-the-rhythm-*
 data copy.json
+
+# Ignore agents
+Agent.md

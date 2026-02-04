@@ -132,10 +132,6 @@ export async function handleEditorChange(
 		existingEntry.c += charsToTrack;
 	}
 
-	console.log("KTR: Current changes:", changes);
-	// WORKING ON UPDATING JUST TODAY!!!
-	state.emit(EVENTS.REFRESH_EVERYTHING);
-
 	/** Debounces updates to the DB, which only happens when
 	 *  the user stops editing the page for 200ms. */
 	if (dbUpdateTimeout) clearTimeout(dbUpdateTimeout);
