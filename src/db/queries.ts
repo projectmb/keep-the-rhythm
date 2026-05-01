@@ -353,7 +353,8 @@ export const deleteActivityFromDate = async (
 		.first();
 
 	if (entry?.id) {
-		getDB().dailyActivity.delete(entry.id);
+		await getDB().dailyActivity.delete(entry.id);
+		await state.plugin.saveDataToJSON();
 		state.emit(EVENTS.REFRESH_EVERYTHING);
 	} else {
 		const notice = new Notice(

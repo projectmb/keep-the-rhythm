@@ -12,6 +12,11 @@ import { floorMomentToFive } from "@/utils/dateUtils";
 import { moment as _moment } from "obsidian";
 import { emit } from "process";
 import { sumBothTimeEntries } from "@/utils/utils";
+import {
+	addDeltaToTimeEntry,
+	getLocalDeviceId,
+	mergeTimeEntries,
+} from "@/utils/activityMerge";
 
 const moment = _moment as unknown as typeof _moment.default;
 
@@ -105,6 +110,7 @@ export async function handleEditorChange(
 	 */
 	const changes: TimeEntry[] = state.currentActivity?.changes || [];
 	const currentTimeKey = floorMomentToFive(moment()).format("HH:mm");
+	const deviceId = getLocalDeviceId(plugin.app.vault.getName());
 	console.log("KTR: Current time key:", currentTimeKey);
 	/**
 	 * Check if there is already a time key (HH:mm) for a change, create one if there isn't
@@ -121,15 +127,25 @@ export async function handleEditorChange(
 		// Updated: Use wordsToTrack and charsToTrack
 		changes.push({
 			timeKey: currentTimeKey,
-			w: wordsToTrack,
-			c: charsToTrack,
+			w: 0,
+			c: 0,
 		});
+		addDeltaToTimeEntry(
+			changes[changes.length - 1],
+			wordsToTrack,
+			charsToTrack,
+			deviceId,
+		);
 	} else {
 		console.log("KTR: Updating existing time entry");
 		// Entry exists, so update the word and char count
 		// Updated: Use wordsToTrack and charsToTrack
-		existingEntry.w += wordsToTrack;
-		existingEntry.c += charsToTrack;
+		addDeltaToTimeEntry(
+			existingEntry,
+			wordsToTrack,
+			charsToTrack,
+			deviceId,
+		);
 	}
 
 	/** Debounces updates to the DB, which only happens when
@@ -219,8 +235,10 @@ async function flushChangesToDB(activity: DailyActivity) {
 
 			for (const entry of currentChanges) {
 				if (mergedMap[entry.timeKey]) {
-					mergedMap[entry.timeKey].w = entry.w;
-					mergedMap[entry.timeKey].c = entry.c;
+					mergedMap[entry.timeKey] = mergeTimeEntries(
+						mergedMap[entry.timeKey],
+						entry,
+					);
 				} else {
 					mergedMap[entry.timeKey] = { ...entry };
 				}
@@ -233,6 +251,7 @@ async function flushChangesToDB(activity: DailyActivity) {
 		});
 
 	checkStreak();
+	await state.plugin.saveDataToJSON();
 	state.emit(EVENTS.REFRESH_EVERYTHING);
 }
 
@@ -240,11 +259,11 @@ async function flushChangesToDB(activity: DailyActivity) {
  * @function cleanDBTimeout
  * Clears timeouts and flushed any data on memory to the DB
  */
-export function cleanDBTimeout() {
+export async function cleanDBTimeout() {
 	if (dbUpdateTimeout) {
 		clearTimeout(dbUpdateTimeout);
 	}
-	flushChangesToDB(state.currentActivity!);
+	await flushChangesToDB(state.currentActivity!);
 }
 
 /**
@@ -285,6 +304,7 @@ export async function handleFileRename(file: TFile, oldPath: string) {
 				dailyEntry.filePath = file.path;
 			});
 
+		await state.plugin.saveDataToJSON();
 		state.emit(EVENTS.REFRESH_EVERYTHING);
 	} catch (error) {
 		console.error(`KTR failed renaming ${file.path} | ${error}`);

@@ -32,6 +32,12 @@ import { migrateDataFromOldFormat } from "./utils/migrateData";
 import { parseQueryToJSEP, parseSlotQuery } from "./core/codeBlockQuery";
 import * as utils from "@/utils/utils";
 import * as events from "@/core/events";
+import {
+	getLocalDeviceId,
+	mergeDailyActivities,
+	normalizeDailyActivities,
+	stripRuntimeFields,
+} from "@/utils/activityMerge";
 
 export default class KeepTheRhythm extends Plugin {
 	data: PluginData = {
@@ -47,6 +53,17 @@ export default class KeepTheRhythm extends Plugin {
 	> = new Map();
 	private JSON_DEBOUNCE_TIME = 1000;
 	private JsonDebounceTimeout: any = null;
+	private externalDataMergeInterval: number | null = null;
+	private isMergingExternalData = false;
+	private backupFolderPath = ".keep-the-rhythm";
+	private syncFolderPath = "Keep The Rhythm";
+	private syncDataPath = "Keep The Rhythm/data.json";
+	private deviceSyncFolderPath = "Keep The Rhythm/devices";
+
+	private get deviceSyncDataPath() {
+		const deviceId = getLocalDeviceId(this.app.vault.getName());
+		return `${this.deviceSyncFolderPath}/${deviceId}.json`;
+	}
 
 	// #region Initialization
 	async onload() {
@@ -56,9 +73,12 @@ export default class KeepTheRhythm extends Plugin {
 
 		initDatabase();
 		getDB().dailyActivity.clear(); // restarts DB to ensure data.json is the source of truth
-		const loadedData = await this.loadData();
+		const pluginData = (await this.loadData()) as PluginData | null;
+		const vaultSyncData = await this.readVaultSyncData();
+		const loadedData = this.mergePluginData(pluginData, vaultSyncData);
 
 		let lastBreakingChangeToSchema = "0.2";
+		let shouldSaveInitialData = false;
 
 		if (loadedData) {
 			await this.backupDataToVaultFolder(loadedData);
@@ -73,17 +93,22 @@ export default class KeepTheRhythm extends Plugin {
 		) {
 			new Notice("KTR: Migrating data from previous versions...");
 			await this.migrateDataFromJSON(loadedData);
+			shouldSaveInitialData = true;
 		} else if (!loadedData) {
 			this.data.schema = lastBreakingChangeToSchema;
 			this.data.stats = {
 				...STARTING_STATS,
 			};
+			shouldSaveInitialData = true;
 		} else {
 			this.data.stats = loadedData.stats;
 			this.data.settings = loadedData.settings;
 		}
 
-		await this.saveData(this.data);
+		if (shouldSaveInitialData) {
+			await this.saveData(this.data);
+			await this.writeVaultSyncData(this.data);
+		}
 
 		// #endregion
 
@@ -119,15 +144,13 @@ export default class KeepTheRhythm extends Plugin {
 			this.createEntriesCodeBlock(),
 		);
 
-		state.on(EVENTS.REFRESH_EVERYTHING, async () => {
-			if (this.JsonDebounceTimeout) {
-				clearTimeout(this.JsonDebounceTimeout);
+		this.externalDataMergeInterval = window.setInterval(async () => {
+			const didMerge = await this.mergeExternalDataFromJSON();
+			if (didMerge) {
+				await this.saveData(this.data);
+				state.emit(EVENTS.REFRESH_EVERYTHING);
 			}
-
-			this.JsonDebounceTimeout = setTimeout(async () => {
-				await this.saveDataToJSON();
-			}, this.JSON_DEBOUNCE_TIME);
-		});
+		}, 10000);
 	}
 
 	private async checkVaultCountStaleness() {
@@ -155,7 +178,7 @@ export default class KeepTheRhythm extends Plugin {
 	}
 
 	private async backupDataToVaultFolder(data: any) {
-		const folderPath = ".keep-the-rhythm";
+		const folderPath = this.backupFolderPath;
 		const typoOlderPath = ".keep-the-rhyhtm"; // there's a typo here and unfortuntely it will haunt me forever
 		const fileName = `backup-${formatDate(new Date())}-${data.schema}.json`;
 		const backupPath = `${folderPath}/${fileName}`;
@@ -200,7 +223,7 @@ export default class KeepTheRhythm extends Plugin {
 		const filesOnBackupsFolder =
 			await this.app.vault.adapter.list(folderPath);
 		const backupFiles = filesOnBackupsFolder.files.filter((f) =>
-			f.endsWith(".json"),
+			/\/backup-\d{4}-\d{2}-\d{2}(?:-[\w\d.]+)?\.json$/.test(f),
 		);
 
 		// only cleans backups if we have more than 3, which should avoid losing stuff even if its older
@@ -296,12 +319,13 @@ export default class KeepTheRhythm extends Plugin {
 			this.data.stats = loadedData.stats;
 			await this.checkPreviousStreak();
 
-			const dailyActivitiesFromJSON =
-				this.data.stats?.dailyActivity || [];
+			const dailyActivitiesFromJSON = normalizeDailyActivities(
+				this.data.stats?.dailyActivity || [],
+			);
+			this.data.stats.dailyActivity = dailyActivitiesFromJSON;
 
 			try {
-				/** BulkPut updates the records if they already exist! */
-				await getDB().dailyActivity.bulkPut(dailyActivitiesFromJSON);
+				await getDB().dailyActivity.bulkAdd(dailyActivitiesFromJSON);
 			} catch (error) {
 				console.error(
 					"Failed loading some data, contact the developer.",
@@ -505,6 +529,31 @@ export default class KeepTheRhythm extends Plugin {
 				this.checkPreviousStreak();
 			},
 		});
+
+		this.addCommand({
+			id: "ktr-export-sync-data",
+			name: "Export stats to vault sync file",
+			callback: async () => {
+				await this.saveDataToJSON();
+				new Notice("KTR: Exported stats to Keep The Rhythm/data.json");
+			},
+		});
+
+		this.addCommand({
+			id: "ktr-import-sync-data",
+			name: "Import stats from vault sync file",
+			callback: async () => {
+				const didMerge = await this.mergeExternalDataFromJSON();
+				await this.saveData(this.data);
+				await this.writeVaultSyncData(this.data);
+				state.emit(EVENTS.REFRESH_EVERYTHING);
+				new Notice(
+					didMerge
+						? "KTR: Imported stats from Keep The Rhythm/data.json"
+						: "KTR: Sync file already matches local stats",
+				);
+			},
+		});
 	}
 
 	private async checkPreviousStreak() {
@@ -559,13 +608,16 @@ export default class KeepTheRhythm extends Plugin {
 	// #region Unloading
 
 	async onunload() {
-		events.cleanDBTimeout();
+		await events.cleanDBTimeout();
 
 		if (this.JsonDebounceTimeout) {
 			clearTimeout(this.JsonDebounceTimeout);
 		}
-		this.saveDataToJSON();
-		this.backupDataToVaultFolder(this.data);
+		if (this.externalDataMergeInterval !== null) {
+			window.clearInterval(this.externalDataMergeInterval);
+		}
+		await this.saveDataToJSON();
+		await this.backupDataToVaultFolder(this.data);
 
 		await getDB().dailyActivity.clear();
 	}
@@ -574,42 +626,11 @@ export default class KeepTheRhythm extends Plugin {
 
 	async onExternalSettingsChange() {
 		try {
-			const newData = (await this.loadData()) as PluginData;
-
-			if (JSON.stringify(newData) == JSON.stringify(this.data)) {
-				return;
+			if (await this.mergeExternalDataFromJSON()) {
+				await this.saveData(this.data);
+				await this.writeVaultSyncData(this.data);
+				state.emit(EVENTS.REFRESH_EVERYTHING);
 			}
-
-			newData.stats?.dailyActivity.forEach(async (activity, index) => {
-				let existingActivity;
-
-				if (activity.id) {
-					existingActivity = await getDB().dailyActivity.get(
-						activity.id,
-					);
-				}
-
-				/** Find any new activity and add it to the db */
-				if (
-					existingActivity &&
-					JSON.stringify(existingActivity) == JSON.stringify(activity)
-				) {
-					return;
-				} else {
-					getDB().dailyActivity.put(activity);
-				}
-			});
-
-			/** Assign new external settings*/
-			if (this.data.settings !== newData.settings) {
-				this.data.settings = {
-					...DEFAULT_SETTINGS,
-					...newData.settings,
-				};
-			}
-
-			state.emit(EVENTS.REFRESH_EVERYTHING);
-			//TODO: ADD "SAVE AND UPDATE" HERE + EMIT UPDATE TO PLUGIN STATE
 		} catch (error) {
 			console.error("Error in onExternalSettingsChange:", error);
 		}
@@ -617,15 +638,235 @@ export default class KeepTheRhythm extends Plugin {
 
 	// #region SAVING DATA
 
-	private async saveDataToJSON() {
+	private mergePluginData(
+		primary: PluginData | null | undefined,
+		secondary: PluginData | null | undefined,
+	): PluginData | null {
+		if (!primary && !secondary) return null;
+		if (!primary) return secondary as PluginData;
+		if (!secondary) return primary;
+
+		const daysWithCompletedGoal = Array.from(
+			new Set([
+				...(primary.stats?.daysWithCompletedGoal || []),
+				...(secondary.stats?.daysWithCompletedGoal || []),
+			]),
+		).sort();
+
+		return {
+			...primary,
+			...secondary,
+			schema: secondary.schema || primary.schema,
+			settings: {
+				...DEFAULT_SETTINGS,
+				...(primary.settings || {}),
+				...(secondary.settings || {}),
+			},
+			stats: {
+				...primary.stats,
+				...secondary.stats,
+				daysWithCompletedGoal,
+				dailyActivity: normalizeDailyActivities([
+					...(primary.stats?.dailyActivity || []),
+					...(secondary.stats?.dailyActivity || []),
+				]),
+			},
+		};
+	}
+
+	private mergePluginDataList(dataList: PluginData[]): PluginData | null {
+		return dataList.reduce<PluginData | null>(
+			(merged, data) => this.mergePluginData(merged, data),
+			null,
+		);
+	}
+
+	private async ensureSyncFolder() {
+		const folderExists = await this.app.vault.adapter.exists(
+			this.syncFolderPath,
+		);
+		if (!folderExists) {
+			await this.app.vault.adapter.mkdir(this.syncFolderPath);
+		}
+
+		const deviceFolderExists = await this.app.vault.adapter.exists(
+			this.deviceSyncFolderPath,
+		);
+		if (!deviceFolderExists) {
+			await this.app.vault.adapter.mkdir(this.deviceSyncFolderPath);
+		}
+	}
+
+	private async readVaultSyncData(): Promise<PluginData | null> {
+		const dataSources: PluginData[] = [];
+
+		try {
+			const exists = await this.app.vault.adapter.exists(
+				this.syncDataPath,
+			);
+			if (exists) {
+				const contents = await this.app.vault.adapter.read(
+					this.syncDataPath,
+				);
+				if (contents) {
+					dataSources.push(JSON.parse(contents) as PluginData);
+				}
+			}
+
+			const deviceFolderExists = await this.app.vault.adapter.exists(
+				this.deviceSyncFolderPath,
+			);
+			if (deviceFolderExists) {
+				const deviceFiles = await this.app.vault.adapter.list(
+					this.deviceSyncFolderPath,
+				);
+				for (const filePath of deviceFiles.files) {
+					if (!filePath.endsWith(".json")) continue;
+
+					try {
+						const contents =
+							await this.app.vault.adapter.read(filePath);
+						if (contents) {
+							dataSources.push(
+								JSON.parse(contents) as PluginData,
+							);
+						}
+					} catch (error) {
+						console.error(
+							`Error reading KTR device sync data: ${filePath}`,
+							error,
+						);
+					}
+				}
+			}
+
+			return this.mergePluginDataList(dataSources);
+		} catch (error) {
+			console.error("Error reading KTR vault sync data:", error);
+			return null;
+		}
+	}
+
+	private async writeVaultSyncData(data: PluginData) {
+		await this.ensureSyncFolder();
+		const dataToSync: PluginData = {
+			...data,
+			stats: {
+				...data.stats,
+				dailyActivity: normalizeDailyActivities(
+					(data.stats?.dailyActivity || []).map(stripRuntimeFields),
+				),
+			},
+		};
+
+		await this.app.vault.adapter.write(
+			this.deviceSyncDataPath,
+			JSON.stringify(dataToSync, null, 2),
+		);
+
+		// Compatibility snapshot for inspection and existing installs. The
+		// authoritative sync source is the per-device files in /devices.
+		await this.app.vault.adapter.write(
+			this.syncDataPath,
+			JSON.stringify(dataToSync, null, 2),
+		);
+	}
+
+	private async mergeExternalDataFromJSON(): Promise<boolean> {
+		if (this.isMergingExternalData) return false;
+
+		this.isMergingExternalData = true;
+		try {
+			const pluginData = (await this.loadData()) as PluginData | null;
+			const vaultSyncData = await this.readVaultSyncData();
+			const newData = this.mergePluginData(pluginData, vaultSyncData);
+			if (!newData?.stats?.dailyActivity) return false;
+
+			const incomingActivities = normalizeDailyActivities(
+				newData.stats.dailyActivity,
+			);
+			let didMerge = false;
+
+			for (const incomingActivity of incomingActivities) {
+				const existingActivity = await getDB()
+					.dailyActivity.where("[date+filePath]")
+					.equals([
+						incomingActivity.date,
+						incomingActivity.filePath,
+					])
+					.first();
+
+				if (existingActivity) {
+					const mergedActivity = mergeDailyActivities(
+						existingActivity,
+						incomingActivity,
+					);
+					if (
+						JSON.stringify(stripRuntimeFields(existingActivity)) !==
+						JSON.stringify(stripRuntimeFields(mergedActivity))
+					) {
+						await getDB().dailyActivity.put(mergedActivity);
+						didMerge = true;
+					}
+				} else {
+					await getDB().dailyActivity.add(incomingActivity);
+					didMerge = true;
+				}
+			}
+
+			const daysWithCompletedGoal = Array.from(
+				new Set([
+					...(this.data.stats?.daysWithCompletedGoal || []),
+					...(newData.stats.daysWithCompletedGoal || []),
+				]),
+			).sort();
+
+			if (
+				JSON.stringify(daysWithCompletedGoal) !==
+				JSON.stringify(this.data.stats?.daysWithCompletedGoal || [])
+			) {
+				didMerge = true;
+			}
+
+			this.data.settings = {
+				...DEFAULT_SETTINGS,
+				...(this.data.settings || {}),
+				...(newData.settings || {}),
+			};
+
+			this.data.stats = {
+				...this.data.stats,
+				...newData.stats,
+				daysWithCompletedGoal,
+				dailyActivity: normalizeDailyActivities(
+					(await getDB().dailyActivity.toArray()).map(
+						stripRuntimeFields,
+					),
+				),
+			};
+
+			return didMerge;
+		} catch (error) {
+			console.error("Error merging external KTR data:", error);
+			return false;
+		} finally {
+			this.isMergingExternalData = false;
+		}
+	}
+
+	public async saveDataToJSON() {
+		await this.mergeExternalDataFromJSON();
 		const dailyActivityDB = await getDB().dailyActivity.toArray();
 
 		this.data.stats = {
 			...this.data.stats,
-			dailyActivity: dailyActivityDB,
+			dailyActivity: normalizeDailyActivities(
+				dailyActivityDB.map(stripRuntimeFields),
+			),
 		};
 
 		await this.saveData(this.data);
+		await this.writeVaultSyncData(this.data);
 	}
 
 	public async updateCurrentStreak(increase: boolean) {
@@ -654,16 +895,18 @@ export default class KeepTheRhythm extends Plugin {
 				this.data.stats.daysWithCompletedGoal = newArray;
 			}
 		}
-		this.quietSave();
+		await this.quietSave();
 	}
 
 	public async updateAndSaveEverything() {
 		await this.saveData(this.data);
+		await this.writeVaultSyncData(this.data);
 		state.emit(EVENTS.REFRESH_EVERYTHING);
 	}
 
 	public async quietSave() {
 		await this.saveData(this.data);
+		await this.writeVaultSyncData(this.data);
 	}
 
 	// #endregion
