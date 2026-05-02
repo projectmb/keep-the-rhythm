@@ -577,6 +577,24 @@ export default class KeepTheRhythm extends Plugin {
 	}
 
 	private initializeEvents() {
+		this.registerDomEvent(
+			this.app.workspace.containerEl,
+			"beforeinput",
+			events.markUserInput,
+			true,
+		);
+		this.registerDomEvent(
+			this.app.workspace.containerEl,
+			"keydown",
+			events.markUserInput,
+			true,
+		);
+		this.registerDomEvent(
+			this.app.workspace.containerEl,
+			"paste",
+			events.markUserInput,
+			true,
+		);
 		this.registerEvent(
 			this.app.workspace.on("editor-change", (editor, info) => {
 				events.handleEditorChange(editor, info, this);
@@ -701,18 +719,6 @@ export default class KeepTheRhythm extends Plugin {
 		const dataSources: PluginData[] = [];
 
 		try {
-			const exists = await this.app.vault.adapter.exists(
-				this.syncDataPath,
-			);
-			if (exists) {
-				const contents = await this.app.vault.adapter.read(
-					this.syncDataPath,
-				);
-				if (contents) {
-					dataSources.push(JSON.parse(contents) as PluginData);
-				}
-			}
-
 			const deviceFolderExists = await this.app.vault.adapter.exists(
 				this.deviceSyncFolderPath,
 			);
@@ -737,6 +743,22 @@ export default class KeepTheRhythm extends Plugin {
 							error,
 						);
 					}
+				}
+			}
+
+			if (dataSources.length > 0) {
+				return this.mergePluginDataList(dataSources);
+			}
+
+			const exists = await this.app.vault.adapter.exists(
+				this.syncDataPath,
+			);
+			if (exists) {
+				const contents = await this.app.vault.adapter.read(
+					this.syncDataPath,
+				);
+				if (contents) {
+					dataSources.push(JSON.parse(contents) as PluginData);
 				}
 			}
 
@@ -777,9 +799,7 @@ export default class KeepTheRhythm extends Plugin {
 
 		this.isMergingExternalData = true;
 		try {
-			const pluginData = (await this.loadData()) as PluginData | null;
-			const vaultSyncData = await this.readVaultSyncData();
-			const newData = this.mergePluginData(pluginData, vaultSyncData);
+			const newData = await this.readVaultSyncData();
 			if (!newData?.stats?.dailyActivity) return false;
 
 			const incomingActivities = normalizeDailyActivities(

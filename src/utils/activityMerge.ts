@@ -47,6 +47,10 @@ function addEntryToSources(
 	};
 }
 
+function sourceTotal(entry: TimeEntry) {
+	return entry.sources ? sumSources(entry.sources) : null;
+}
+
 export function getLocalDeviceId(vaultName: string) {
 	const key = `${DEVICE_ID_KEY_PREFIX}:${vaultName}`;
 	const existing = window.localStorage.getItem(key);
@@ -96,6 +100,25 @@ export function mergeTimeEntries(
 			w: Math.max(left.w || 0, right.w || 0),
 			c: Math.max(left.c || 0, right.c || 0),
 		};
+	}
+
+	const leftSourceTotal = sourceTotal(left);
+	const rightSourceTotal = sourceTotal(right);
+	if (
+		leftSourceTotal &&
+		!right.sources &&
+		leftSourceTotal.w === (right.w || 0) &&
+		leftSourceTotal.c === (right.c || 0)
+	) {
+		return { ...left, sources: { ...left.sources } };
+	}
+	if (
+		rightSourceTotal &&
+		!left.sources &&
+		rightSourceTotal.w === (left.w || 0) &&
+		rightSourceTotal.c === (left.c || 0)
+	) {
+		return { ...right, sources: { ...right.sources } };
 	}
 
 	const sources: Record<string, TimeEntrySource> = {};

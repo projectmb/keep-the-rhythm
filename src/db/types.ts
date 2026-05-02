@@ -4,6 +4,8 @@ export interface DailyActivity {
 	filePath: string;
 	wordCountStart: number;
 	charCountStart: number;
+	lastWordCount?: number;
+	lastCharCount?: number;
 	changes: TimeEntry[];
 }
 

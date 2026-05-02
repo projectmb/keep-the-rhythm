@@ -14,6 +14,68 @@ import { FileView, Notice, setIcon } from "obsidian";
 interface EntriesProps {
 	date?: string;
 }
+
+const getDisplayPathKey = (filePath: string) =>
+	getFileNameWithoutExtension(filePath).toLowerCase();
+
+const getActivityWordSignature = (activity: DailyActivity) =>
+	(activity.changes || [])
+		.map((entry) => `${entry.timeKey}:${entry.w || 0}:${entry.c || 0}`)
+		.sort()
+		.join("|");
+
+const shouldCollapseDisplayEntry = (
+	existing: DailyActivity,
+	incoming: DailyActivity,
+) => {
+	if (existing.filePath === incoming.filePath) return true;
+	if (getDisplayPathKey(existing.filePath) !== getDisplayPathKey(incoming.filePath)) {
+		return false;
+	}
+
+	const existingSignature = getActivityWordSignature(existing);
+	const incomingSignature = getActivityWordSignature(incoming);
+	if (existingSignature && existingSignature === incomingSignature) {
+		return true;
+	}
+
+	return (
+		sumTimeEntries(existing, Unit.WORD, true) === 0 ||
+		sumTimeEntries(incoming, Unit.WORD, true) === 0
+	);
+};
+
+const getPreferredDisplayEntry = (
+	existing: DailyActivity,
+	incoming: DailyActivity,
+) => {
+	const existingDepth = existing.filePath.split("/").filter(Boolean).length;
+	const incomingDepth = incoming.filePath.split("/").filter(Boolean).length;
+	return incomingDepth > existingDepth ? incoming : existing;
+};
+
+const collapseDisplayEntries = (activities: DailyActivity[]) => {
+	const collapsed: DailyActivity[] = [];
+
+	for (const activity of activities) {
+		const existingIndex = collapsed.findIndex((existing) =>
+			shouldCollapseDisplayEntry(existing, activity),
+		);
+
+		if (existingIndex === -1) {
+			collapsed.push(activity);
+			continue;
+		}
+
+		collapsed[existingIndex] = getPreferredDisplayEntry(
+			collapsed[existingIndex],
+			activity,
+		);
+	}
+
+	return collapsed;
+};
+
 export const Entries = ({ date = formatDate(new Date()) }: EntriesProps) => {
 	const [unit, setUnit] = useState<Unit>(Unit.WORD);
 	const [entries, setEntries] = useState<DailyActivity[]>([]);
@@ -42,7 +104,7 @@ export const Entries = ({ date = formatDate(new Date()) }: EntriesProps) => {
 		}
 
 		setEntries(
-			fetchedActivities
+			collapseDisplayEntries(fetchedActivities)
 				.filter((entry) => sumTimeEntries(entry, Unit.WORD, true) != 0)
 				.sort((a, b) => {
 					const aCount = sumTimeEntries(a, unit, true);

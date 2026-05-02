@@ -22,6 +22,16 @@ const moment = _moment as unknown as typeof _moment.default;
 
 let dbUpdateTimeout: NodeJS.Timeout | null = null;
 const DEBOUNCE_TIME = 100; // ms
+let lastUserInputAt = 0;
+const USER_INPUT_GRACE_TIME = 2500;
+
+export function markUserInput() {
+	lastUserInputAt = Date.now();
+}
+
+function hasRecentUserInput() {
+	return Date.now() - lastUserInputAt < USER_INPUT_GRACE_TIME;
+}
 
 /**
  * @function handleEditorChange
@@ -81,10 +91,20 @@ export async function handleEditorChange(
 	 * @var prevWordsAdded: amount of words written today (added across changes[])
 	 * @var newWordCount: current amount of words in the file
 	 */
-	const { totalWords, totalChars } = sumBothTimeEntries(activity);
+	const previousWordCount =
+		activity.lastWordCount ?? activity.wordCountStart;
+	const previousCharCount =
+		activity.lastCharCount ?? activity.charCountStart;
 
-	const wordsAdded = newWordCount - totalWords;
-	const charsAdded = newCharCount - totalChars;
+	const wordsAdded = newWordCount - previousWordCount;
+	const charsAdded = newCharCount - previousCharCount;
+	activity.lastWordCount = newWordCount;
+	activity.lastCharCount = newCharCount;
+
+	if (!hasRecentUserInput()) {
+		await updateActivityBaseline(activity);
+		return;
+	}
 
 	// Only track positive changes (additions), ignore deletions
 	const wordsToTrack = wordsAdded > 0 ? wordsAdded : 0;
@@ -184,24 +204,30 @@ export async function handleFileOpen(file: TFile) {
 		.dailyActivity.where("[date+filePath]")
 		.equals([state.today, file.path])
 		.first();
+	const content = await state.plugin.app.vault.read(file);
+	const currentWordCount = getLanguageBasedWordCount(
+		content,
+		state.plugin.data.settings.enabledLanguages,
+	);
+	const currentCharCount = content.length;
 
 	/** File was not yet seen today, create an entry for it */
 	if (!entry) {
-		const content = await state.plugin.app.vault.read(file);
-		const currentWordCount = getLanguageBasedWordCount(
-			content,
-			state.plugin.data.settings.enabledLanguages,
-		);
-
 		entry = {
 			date: state.today,
 			filePath: file.path,
 			wordCountStart: currentWordCount,
-			charCountStart: content.length,
+			charCountStart: currentCharCount,
+			lastWordCount: currentWordCount,
+			lastCharCount: currentCharCount,
 			changes: [],
 		};
 
 		await getDB().dailyActivity.add(entry);
+	} else {
+		entry.lastWordCount = currentWordCount;
+		entry.lastCharCount = currentCharCount;
+		await getDB().dailyActivity.put(entry);
 	}
 
 	if (entry) state.setCurrentActivity(entry);
@@ -226,6 +252,8 @@ async function flushChangesToDB(activity: DailyActivity) {
 		.modify((dailyEntry) => {
 			const existingChanges: TimeEntry[] = dailyEntry.changes || [];
 			const currentChanges: TimeEntry[] = activity.changes;
+			dailyEntry.lastWordCount = activity.lastWordCount;
+			dailyEntry.lastCharCount = activity.lastCharCount;
 
 			// Convert existing changes to a map
 			const mergedMap: Record<string, TimeEntry> = {};
@@ -253,6 +281,18 @@ async function flushChangesToDB(activity: DailyActivity) {
 	checkStreak();
 	await state.plugin.saveDataToJSON();
 	state.emit(EVENTS.REFRESH_EVERYTHING);
+}
+
+async function updateActivityBaseline(activity: DailyActivity) {
+	if (!activity) return;
+
+	await getDB()
+		.dailyActivity.where("[date+filePath]")
+		.equals([activity.date, activity.filePath])
+		.modify((dailyEntry) => {
+			dailyEntry.lastWordCount = activity.lastWordCount;
+			dailyEntry.lastCharCount = activity.lastCharCount;
+		});
 }
 
 /**
